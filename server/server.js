@@ -1,19 +1,20 @@
-var express = require('../node_modules/express');
-var app = express();
+const express = require('../node_modules/express');
+const app = express();
+const router = express.Router();
 
 // these are the sub apps
-var ayhpdata = require('../ayhpdata/index');
+var ahypdata = require('../ahypdata/index');
 
 // mount sub apps
-app.use('/ayhpdata', ayhpdata);
+app.use('/ahypdata', ahypdata);
 
 // home page for rasheed.work
-app.get('/', (req, res) => {
-  res.send('main1 slash');
+router.get('/', (req, res) => {
+  res.send('main server');
 });
 
 // static file server
-app.get('/public/*', (req, res) => {
+router.get('/public/*', (req, res) => {
   var path = req.params[0];
   if (path.indexOf('..') === -1) { // don't allow peeking anywhere else
     return res.sendFile(__dirname + '/public/' + path);
@@ -23,7 +24,11 @@ app.get('/public/*', (req, res) => {
   }
 });
 
-
+//
+app.use('/main', router);
+//
+module.exports = app;
+//
 app.listen(8081, () => {
   console.log('Main host app listening internally on port 8081!');
 });
