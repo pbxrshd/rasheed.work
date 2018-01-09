@@ -1,0 +1,26 @@
+<div>
+
+<h1>weather data</h1>
+<h2>
+current: <%= current.time %> <%= current.summary %> <%= current.icon %> <%= current.temperature %>
+</h2>
+
+<h2>
+hourly:<%= hourly.summary %> <%= hourly.icon %>%>
+</h2>
+<ul>
+<% hourly.hourData.forEach(function(e) { %>
+  <li><%= e.time %> <%= e.summary %> <%= e.icon %> <%= e.temperature %></li>
+<% }); %>
+</ul>
+
+<h2>
+  daily:<%= daily.summary %> <%= daily.icon %>%>
+  </h2>
+  <ul>
+  <% daily.dayData.forEach(function(e) { %>
+    <li><%= e.time %> <%= e.summary %> <%= e.icon %> <%= e.temperatureLow %> <%= e.temperatureLowTime %> <%= e.temperatureHigh %> <%= e.temperatureHighTime %></li>
+  <% }); %>
+  </ul>
+
+</div>

@@ -46,6 +46,16 @@ $ service ssh restart # reload for changes to take effect
 ```
 $ ssh -o "IdentitiesOnly=yes" -i ~/.ssh/mac-id_rsa_nabeel_rasheed_yahoo core@104.236.123.34
 ```
+  or could use rasheed.work for the ip
+  to make this easier, created ~/.ssh/config, and added the following entry
+```
+  Host rasheed.work
+      IdentityFile ~/.ssh/mac-id_rsa_nabeel_rasheed_yahoo
+```
+  now was able to have it pick the correct public key
+```
+  $ ssh core@rasheed.work
+```
 
 ### installing node:
 [https://www.digitalocean.com/community/tutorials/how-to-install-node-js-on-ubuntu-16-04](https://www.digitalocean.com/community/tutorials/how-to-install-node-js-on-ubuntu-16-04)
