@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title></title>
+
+    <link href="res/css/bootstrap.min.css" rel="stylesheet">
+    <link href="res/css/fontawesome.css" rel="stylesheet">
+
+    <script type="text/javascript" src="res/js/jquery.min.js"></script>
+    <script type="text/javascript" src="res/js/popper.min.js"></script>
+    <script type="text/javascript" src="res/js/bootstrap.min.js"></script>
+    <script type="text/javascript" src="res/js/ag-grid-enterprise.js"></script>
+    <script type="text/javascript" src="res/js/d3.v4.min.js"></script>
+
+    <script type="text/javascript" src="data/call_data.json.js"></script>
+
+    <script type="text/javascript">
+        "use strict";
+
+//var SECTIONS = [];
+
+        var BEACON_DATA = [];
+
+        var BEACON_GRID = (function() {
+            var AG_GRID_LICENSE_KEY = "Accertify__1Devs6_October_2019__MTU3MDMxNjQwMDAwMA==7ca4f1a01d4b5ddb80f9d6def6f2dcee";
+            var GRID_REF = null;
+
+            var COLUMN_DEFS = [
+                // group cell renderer needed for expand / collapse icons
+                {field: 'name', cellRenderer: 'agGroupCellRenderer'},
+                {field: 'account'},
+                {field: 'calls'},
+                {field: 'minutes', valueFormatter: "x.toLocaleString() + 'm'"}
+            ];
+            var GRID_OPTIONS = {
+                columnDefs: COLUMN_DEFS,
+                masterDetail: true,
+                detailCellRendererParams: {
+                    detailGridOptions: {
+                        columnDefs: [
+                            {field: 'callId'},
+                            {field: 'direction'},
+                            {field: 'number'},
+                            {field: 'duration', valueFormatter: "x.toLocaleString() + 's'"},
+                            {field: 'switchCode'}
+                        ],
+                        onFirstDataRendered(params) {
+                            params.api.sizeColumnsToFit();
+                        }
+                    },
+                    getDetailRowData: function (params) {
+                        params.successCallback(params.data.callRecords);
+                    }
+                },
+                onFirstDataRendered(params) {
+                    params.api.sizeColumnsToFit();
+                }
+            };
+
+            function init() {
+                agGrid.LicenseManager.setLicenseKey(AG_GRID_LICENSE_KEY);
+                GRID_REF = document.querySelector("#beacon_panel div.grid-container");
+                GRID_REF.innerHTML = "";
+                //DATA = CALL_DATA;
+            }
+
+            function test() {
+                new agGrid.Grid(GRID_REF, GRID_OPTIONS);
+                GRID_OPTIONS.api.setRowData(CALL_DATA);
+            }
+            return {
+                init: init,
+                test : test
+            }
+        })(); // BEACON_GRID
+
+
+
+        var BEACON_VIZ = (function() {
+            //
+            var IS_INITIALIZED = false;
+            //
+            function init() {
+                if (IS_INITIALIZED) {
+                    // TODO clear out any renders and event listeners from previous invocations
+                    return;
+                }
+                //statusRef = document.querySelector("#status");
+                TIMELINE.init();
+                HANDLE.init();
+                CARDS.init();
+                IS_INITIALIZED = true;
+            }
+            //
+            var CARDS = {
+                count: 5,
+                cards: [],
+                init: function() {
+                    // populate the cards array such that it holds a window of sequence of CARDS.count pages in DATA
+                    // the current card is centered in the center of the window. so when the the first or last cards are current,
+                    // they are always centered in the window, with the empty spots in the window indicated by -1
+                    for (var i = 0; i < CARDS.count; i++) {
+                        CARDS.cards[i] = {section: -1, ref: document.querySelector("#beacon_panel div[data-id='" + i + "'].tn-card")};
+                    }
+                },
+                updateTo: function(sectionIndex) {
+                    // return true if cards were updated
+                    var dataLength = BEACON_DATA.length;
+                    // clamp sectionIndex
+                    sectionIndex = sectionIndex < 0 ? 0 : sectionIndex > (dataLength - 1) ? dataLength - 1 : sectionIndex;
+                    if (TIMELINE.currentSection === sectionIndex) {
+                        return false; // no-op, change to same state requested
+                    }
+                    [-2, -1, 0, 1, 2].forEach(function(e,i) { // [-2, -1, 0, 1, 2] is for CARDS.count = 5
+                        var dataIndex = sectionIndex + e;
+                        CARDS.cards[i].section = (dataIndex < 0 || dataIndex >= dataLength) ? -1 : dataIndex;
+                    });
+                    CARDS.cards.forEach(function(card) {
+                        var content = "";
+                        if (card.section !== -1) {
+                            content = "Page " + card.section;
+                            card.ref.classList.remove("empty");
+                        } else {
+                            card.ref.classList.add("empty");
+                        }
+                        card.ref.textContent = content;
+                    });
+                    // set card nav state
+                    /* TODO
+if i === 0, disable left nav, else enable it
+if i === maxSectionIndex disable right nav else disable it
+                    */
+                    return true;
+                }
+            };
+            //
+            var TIMELINE = {
+                init: function() {
+                    document.querySelector("#beacon_panel div.tl-sections")
+                         .addEventListener("click", function() {BEACON_VIZ.UI("timeline_clicked", event);});
+                    TIMELINE.barLeft = (HANDLE.width/2);
+                },
+                width: 1120,
+                barWidth: null,
+                barLeft: 0,
+                scale: null,
+                sections: [],
+                currentSection: 0, // index, in sections[]
+                render: function (data) {
+                    TIMELINE.barWidth = TIMELINE.width - HANDLE.width; // space for 50% of handle on either side of the bar
+                    var totalDuration = data[data.length - 1].of + data[data.length - 1].d;
+                    document.querySelector("#beacon_panel div.tl-handle").style.width = HANDLE.width + "px";
+                    var bar = document.querySelector("#beacon_panel div.tl-sections");
+                    bar.style.width = TIMELINE.barWidth + "px";
+                    bar.style.left = TIMELINE.barLeft + "px";
+                    TIMELINE.scale = d3.scaleLinear().domain([0, totalDuration]).range([0, TIMELINE.barWidth]);
+                    var sectionsFragment = document.createDocumentFragment();
+                    var offset = 0;
+                    var duration = 0;
+                    //var colors = ["#c0c0c0","#a9a9a9"];
+                    var colors = ["#88bde6", "#fbb258", "#90cd97", "#f6aac9", "#bfa554", "#bc99c7"];
+                    data.forEach(function(ts, i) {
+                        offset = duration + offset;
+                        duration = Math.round(TIMELINE.scale(ts.d));
+                        var section = document.createElement("div");
+                        section.setAttribute("class", "tl-section");
+                        section.setAttribute("data-id", ts.pid);
+                        section.setAttribute("data-index", i);
+                        section.setAttribute("title", ts.pid);
+                        section.style.width = duration + "px";
+                        section.style.left = offset + "px";
+                        section.style.backgroundColor = colors[i % colors.length];
+                        sectionsFragment.appendChild(section);
+                        TIMELINE.sections.push({duration:duration,offset:offset,ref:section});
+                    });
+                    //SECTIONS = TIMELINE.sections; // temp
+                    //console.dir(TIMELINE.sections);
+                    bar.appendChild(sectionsFragment);
+                },
+                markTo: function(sectionIndex) {
+                    if (sectionIndex !== TIMELINE.currentSection) {
+                        TIMELINE.sections[TIMELINE.currentSection].ref.classList.remove("current");
+                        TIMELINE.currentSection = sectionIndex;
+                        TIMELINE.sections[TIMELINE.currentSection].ref.classList.add("current");
+                        // highlight the section and neighbours
+                        var offset = TIMELINE.barLeft ;
+                        if (CARDS.cards[0].section !== -1) {
+                            offset += TIMELINE.sections[CARDS.cards[0].section].offset;
+                        }
+                        var width = 0;
+                        CARDS.cards.forEach(function(card) {
+                            if (card.section !== -1) {
+                                width += TIMELINE.sections[card.section].duration;
+                            }
+                        });
+                        var rangeRef = document.querySelector("#beacon_panel div.tn-range");
+                        rangeRef.style.left = offset + "px";
+                        rangeRef.style.width = width + "px";
+                    }
+                },
+                midOffset: function(sectionIndex) {
+                    return TIMELINE.sections[sectionIndex].offset + Math.floor(TIMELINE.sections[sectionIndex].duration/2);
+                },
+                determineIndex: function(xPosn) {
+                    var i = 0;
+                    for (i; i < TIMELINE.sections.length; i++) {
+                        if (xPosn < TIMELINE.sections[i].offset) {
+                            return i - 1;
+                        }
+                    }
+                    return i - 1;
+                }
+            };
+            //
+            var HANDLE = {
+                init: function() {
+                    HANDLE.ref = document.querySelector("#beacon_panel div.tl-handle");
+                    HANDLE.ref.addEventListener("mousedown", HANDLE.mouseDown);
+                    HANDLE.bodyRef = document.querySelector("#beacon_panel div.tl-handle-body");
+                },
+                ref: null,
+                bodyRef: null,
+                width: 140,
+                xd: 0, // calc distance between mousedown and mousemove events
+                xc: 0, // calc current value of x
+                xs: 0, // cals start position
+                isMouseDown: false,
+                needRaf: true, // to track if call to requestAnimationFrame is needed
+                mouseDown: function mouseDown(e) {
+                    e.preventDefault();
+                    HANDLE.isMouseDown = true;
+                    document.addEventListener("mousemove", HANDLE.mouseMove);
+                    document.addEventListener("mouseup", HANDLE.mouseUp);
+                    HANDLE.xc = parseInt(getComputedStyle(HANDLE.ref, null).getPropertyValue("transform").split(",")[4]); // TODO simplify?
+                    HANDLE.xs = e.clientX;
+                    HANDLE.bodyRef.classList.add("active");
+                },
+                mouseMove: function mouseMove(e) {
+                    e.preventDefault();
+                    HANDLE.xd = (e.clientX - HANDLE.xs) + HANDLE.xc;
+                    // constrain x to timeline
+                    HANDLE.xd = HANDLE.xd < 0 ? 0 : HANDLE.xd > TIMELINE.barWidth ? TIMELINE.barWidth : HANDLE.xd;
+                    //statusRef.textContent = HANDLE.xd;
+                    if (HANDLE.needRaf) {
+                        HANDLE.needRaf = false;
+                        requestAnimationFrame(function() {
+                            HANDLE.needRaf = true;
+                            HANDLE.ref.style.transform = "translateX(" + HANDLE.xd + "px)";
+                            var sectionIndex = TIMELINE.determineIndex(HANDLE.xd);
+                            //statusRef.textContent = `x:${HANDLE.xd} section:${sectionIndex}`; // TODO temp
+                            if (sectionIndex !== TIMELINE.currentSection) {
+                                CARDS.updateTo(sectionIndex);
+                                // these can be async calls?
+                                TIMELINE.markTo(sectionIndex);
+                                HANDLE.updateContent(sectionIndex);
+                            }
+                        });
+                    };
+                },
+                mouseUp: function mouseUp(e) {
+                    e.preventDefault();
+                    HANDLE.isMouseDown = false;
+                    HANDLE.bodyRef.classList.remove("active");
+                    document.removeEventListener("mousemove", HANDLE.mouseMove);
+                    document.removeEventListener("mouseup", HANDLE.mouseUp);
+                },
+                moveTo: function(sectionIndex) {
+                    // move handle to middle of clicked section
+                    HANDLE.ref.style.transform = "translateX(" + TIMELINE.midOffset(sectionIndex) + "px)";
+                },
+                updateContent: function(sectionIndex) {
+                    // get BEACON_DATA[sectionIndex] and update content
+                    var datum = BEACON_DATA[sectionIndex];
+                    document.querySelector("#beacon_panel div.tl-handle-content1").textContent = "Page " + sectionIndex;
+                    document.querySelector("#beacon_panel div.tl-handle-content2").textContent = datum.st;
+                    document.querySelector("#beacon_panel div.tl-handle-content3").textContent = datum.et;
+                    document.querySelector("#beacon_panel div.tl-handle-content4").textContent = datum.d/1000 + " secs";
+                }
+            };
+
+            //
+            function UI(id, args) {
+                if (id === "sync_section") {
+                    var sectionIndex = parseInt(args);// expecting args to be sectionIndex to sync to
+                    if (CARDS.updateTo(sectionIndex)) {
+                        TIMELINE.markTo(sectionIndex);
+                        HANDLE.moveTo(sectionIndex);
+                        HANDLE.updateContent(sectionIndex);
+                    }
+                    return;
+                }
+                if (id === "timeline_clicked") {
+                    // expecting args to be "event"
+                    var sectionIndex = parseInt(args.target.getAttribute("data-index"));
+                    BEACON_VIZ.UI("sync_section", sectionIndex);
+                    return;
+                }
+                if (id === "prev-page") {
+                    BEACON_VIZ.UI("sync_section", TIMELINE.currentSection - 1);
+                    return;
+                }
+                if (id === "next-page") {
+                    BEACON_VIZ.UI("sync_section", TIMELINE.currentSection + 1);
+                    return;
+                }
+                if (id === "page-clicked") {
+                    var section = CARDS.cards[parseInt(args.getAttribute("data-id"))].section;
+                    if (section !== -1) {
+                        BEACON_VIZ.UI("sync_section", section);
+                    }
+                    return;
+                }
+            }
+
+            function render() {
+               init();
+               TIMELINE.render(BEACON_DATA);
+               BEACON_VIZ.UI("sync_section", BEACON_DATA.length - 1);
+            }
+
+            function test() {
+
+
+                /*
+                var offset = 0;
+                var tsprev = 0;
+                events1.forEach(function (e) {
+                    //var ts = (new Date(e.ts)).getTime();
+                    //var duration = ts - tsprev;
+                    //var row = `{pid:${e.pid},st:"${e.ts}",ts:${ts},d:${duration},of:${offset}},`;
+                    var et = new Date(e.ts + e.d);
+                    var etValue = et.getFullYear() + "-" + String(et.getMonth()+1).padStart(2,"0") + "-";
+                    etValue += String(et.getDate()).padStart(2,"0") + " ";
+                    etValue += String(et.getHours()).padStart(2,"0") + ":" + String(et.getMinutes()).padStart(2,"0") + ":";
+                    etValue += String(et.getSeconds()).padStart(2,"0");
+                    //2018-11-08 14:43:27
+                    var row = `{pid:${e.pid},st:"${e.st}",et:"${etValue}",ts:${e.ts},d:${e.d},of:${e.of}},`;
+                    //offset += duration;
+                    //tsprev = ts;
+                    console.log(row);
+                });
+                */
+
+            }
+
+            return {
+                //init: init,
+                render: render,
+                UI: UI,
+                test : test
+            }
+        })(); // BEACON_VIZ
+
+
+ function main() {
+    BEACON_DATA = events1;
+    BEACON_VIZ.render();
+    BEACON_GRID.init();
+    BEACON_GRID.test();
+ }
+
+
+
+
+function loadJS(url, callback, location) {
+    var scriptTag = document.createElement('script');
+    scriptTag.src = url;
+    scriptTag.onload = callback;
+    scriptTag.onreadystatechange = callback;
+    location = location || document.body;
+    location.appendChild(scriptTag);
+};
+
+function test() {
+    /*
+    var dataUrl = "data/sandi.nowosielski@vividseats.com-summary.js";
+    loadJS(dataUrl, function(){console.log("loaded:" + dataUrl)});
+    dataUrl = "data/sandi.nowosielski@vividseats.com-detail.js";
+    loadJS(dataUrl, function(){console.log("loaded:" + dataUrl)});
+*/
+
+    var dataUrl = "data/rbeltran@accertify.com-summary.js";
+    loadJS(dataUrl, function(){console.log("loaded:" + dataUrl)});
+    dataUrl = "data/rbeltran@accertify.com-detail.js";
+    loadJS(dataUrl, function(){console.log("loaded:" + dataUrl)});
+
+    /*
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "data/sandi.nowosielski@vividseats.com-summary.json", true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState == 4) {
+            // JSON.parse does not evaluate the attacker's scripts.
+            console.log("parsing...");
+            JSON = JSON.parse(xhr.responseText);
+            console.log("parsed");
+        }
+    }
+    xhr.send();
+    */
+
+}
+
+var events1 = [
+    {pid:10,st:"2018-11-08 14:40:36",et:"2018-11-08 14:40:41",ts:1541709636000,d:5000,of:0},
+    {pid:11,st:"2018-11-08 14:40:41",et:"2018-11-08 14:40:58",ts:1541709641000,d:17000,of:5000},
+    {pid:12,st:"2018-11-08 14:40:58",et:"2018-11-08 14:42:14",ts:1541709658000,d:76000,of:22000},
+    {pid:13,st:"2018-11-08 14:42:14",et:"2018-11-08 14:43:07",ts:1541709734000,d:53000,of:98000},
+    {pid:14,st:"2018-11-08 14:43:07",et:"2018-11-08 14:43:23",ts:1541709787000,d:16000,of:151000},
+    {pid:15,st:"2018-11-08 14:43:23",et:"2018-11-08 14:43:26",ts:1541709803000,d:3000,of:167000},
+    {pid:16,st:"2018-11-08 14:43:26",et:"2018-11-08 14:43:27",ts:1541709806000,d:1000,of:170000},
+    {pid:17,st:"2018-11-08 14:43:27",et:"2018-11-08 14:43:28",ts:1541709807000,d:1000,of:171000},
+    {pid:18,st:"2018-11-08 14:43:28",et:"2018-11-08 14:43:29",ts:1541709808000,d:1000,of:172000},
+    {pid:19,st:"2018-11-08 14:43:29",et:"2018-11-08 14:43:54",ts:1541709809000,d:25000,of:173000},
+    {pid:20,st:"2018-11-08 14:43:54",et:"2018-11-08 14:44:00",ts:1541709834000,d:6000,of:198000},
+    {pid:21,st:"2018-11-08 14:44:00",et:"2018-11-08 14:44:20",ts:1541709840000,d:20000,of:204000},
+    {pid:22,st:"2018-11-08 14:44:20",et:"2018-11-08 14:44:26",ts:1541709860000,d:6000,of:224000},
+    {pid:23,st:"2018-11-08 14:44:26",et:"2018-11-08 14:45:11",ts:1541709866000,d:45000,of:230000},
+    {pid:24,st:"2018-11-08 14:45:11",et:"2018-11-08 14:45:22",ts:1541709911000,d:11000,of:275000},
+    {pid:25,st:"2018-11-08 14:45:22",et:"2018-11-08 14:45:27",ts:1541709922000,d:5000,of:286000},
+    {pid:26,st:"2018-11-08 14:45:27",et:"2018-11-08 14:45:28",ts:1541709927000,d:1000,of:291000},
+    {pid:27,st:"2018-11-08 14:45:28",et:"2018-11-08 14:54:58",ts:1541709928000,d:570000,of:292000},
+    {pid:28,st:"2018-11-08 14:54:58",et:"2018-11-08 14:55:17",ts:1541710498000,d:19000,of:862000},
+    {pid:29,st:"2018-11-08 14:55:17",et:"2018-11-08 14:55:18",ts:1541710517000,d:1000,of:881000},
+    {pid:30,st:"2018-11-08 14:55:18",et:"2018-11-08 14:55:21",ts:1541710518000,d:3000,of:882000}
+];
+
+    </script>
+
+    <style type="text/css">
+
+    #beacon_panel {
+        border: 1px solid black;
+        margin: 10px;
+    }
+    #beacon_panel div.viz-container {
+        display: flex;
+        flex-direction: row;
+        padding-top: 20px;
+        padding-left: 38px;
+    }
+    #beacon_panel div.tn-nav {
+        padding: 100px 0px 0px 0px;
+    }
+    #beacon_panel i.tn-nav {
+        font-size: 32px;
+    }
+    #beacon_panel div.tn-cards-container {
+
+    }
+    #beacon_panel div.tn-cards {
+        display: flex;
+        flex-direction: row;
+        position: relative;
+        justify-content: space-between;
+        background-color: #434040;
+        padding: 20px;
+        width: 981px;
+        border-radius: 6px 6px 0px 0px;
+    }
+    #beacon_panel div.tn-card {
+        border: 1px solid black;
+        border-radius: 6px;
+        padding: 10px;
+        background-color: #fff;
+        min-width: 172px;
+        min-height: 200px;
+        font-size: 24px;
+        text-align: center;
+    }
+    #beacon_panel div.tn-card.current {
+        background-color: #87cefa;
+    }
+    #beacon_panel div.tn-card.empty {
+        opacity: 0.2;
+    }
+    #beacon_panel div.tn-card.current1 {
+        font-size: 1.3em;
+        color:#434040;
+        background-color: #1e90ff;
+        border: 1px solid #434040;
+        border-width: 5px 0px;
+    }
+    #beacon_panel div.tn-card.current2 {
+        font-size: 1.2em;
+        color:#434040;
+        background-color: #1e90ff;
+        border: 1px solid #434040;
+        border-width: 10px 0px;
+    }
+    #beacon_panel div.tl-container {
+        position: relative;
+        border-bottom: 1px solid black;
+        height: 150px;
+    }
+    #beacon_panel div.tn-range {
+        position: absolute;
+        background-color: #434040;
+        height: 10px;
+    }
+    #beacon_panel div.tl-sections {
+        position: relative;
+        top: 10px;
+        z-index: 10;
+    }
+    #beacon_panel div.tl-section {
+        position: absolute;
+        height: 32px;
+        border-right: 1px solid #434040;
+    }
+    #beacon_panel div.tl-section.current {
+        background-color: #87cefa !important;
+    }
+    #beacon_panel div.tl-handle-container {
+        position: relative;
+    }
+    #beacon_panel div.tl-handle {
+        top: 20px;
+        transform: translateX(0);
+        cursor: ew-resize;
+        position: absolute;
+    }
+    #beacon_panel div.tl-handle-pointer {
+        height: 0px;
+        width: 0px;
+        border: 20px solid transparent;
+        border-bottom-color: #434040;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    #beacon_panel div.tl-handle-body {
+        color: #fff;
+        background-color: #434040;
+        border: 1px solid #434040;
+        border-radius: 6px;
+        padding: 4px;
+        text-align: center;
+        user-select: none;
+        font-size: 11px;
+    }
+    #beacon_panel div.tl-handle-body.active {
+        box-shadow: 3px 3px 6px #a9a9a9, -3px 3px 6px #a9a9a9;
+    }
+
+    #beacon_panel div.grid-container {
+        height: 600px;
+        border: 1px solid black;
+    }
+
+</style>
+    </head>
+<body>
+
+
+<div class="main-container">
+    <div class="main-header">
+    </div><!-- .top-header -->
+
+    <div class="main-body">
+
+        <div id="beacon_panel">
+            <div class="viz-container">
+                <div class="tn-nav"><i class="fa fa-chevron-circle-left tn-nav" onclick="BEACON_VIZ.UI('prev-page')"></i></div>
+                <div class="tn-cards-container">
+                    <div class="tn-cards">
+                        <div data-id="0" class="tn-card current2" onclick="BEACON_VIZ.UI('page-clicked', this)"></div>
+                        <div data-id="1" class="tn-card current1" onclick="BEACON_VIZ.UI('page-clicked', this)"></div>
+                        <div data-id="2" class="tn-card current" onclick="BEACON_VIZ.UI('page-clicked', this)"></div>
+                        <div data-id="3" class="tn-card current1" onclick="BEACON_VIZ.UI('page-clicked', this)"></div>
+                        <div data-id="4" class="tn-card current2" onclick="BEACON_VIZ.UI('page-clicked', this)"></div>
+                    </div>
+                </div>
+                <div class="tn-nav"><i class="fa fa-chevron-circle-right tn-nav" onclick="BEACON_VIZ.UI('next-page')"></i></div>
+            </div>
+            <div class="tl-container">
+                <div class="tn-range"></div>
+                <div class="tl-sections"></div>
+                <div class="tl-handle-container">
+                    <div class="tl-handle">
+                        <div class="tl-handle-pointer"></div>
+                        <div class="tl-handle-body">
+                            <div class="tl-handle-content1"></div>
+                            <div class="tl-handle-content2"></div>
+                            <div class="tl-handle-content3"></div>
+                            <div class="tl-handle-content4"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="grid-container"></div>
+        </div><!-- beacon_panel -->
+
+        <div id="status"></div>
+
+    </div><!-- .main-body -->
+</div><!-- .main-container -->
+
+<script>
+    main();
+</script>
+
+</body>
+</html>
